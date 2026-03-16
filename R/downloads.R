@@ -227,73 +227,81 @@ make_db <- function(path_dir_db, logs) {
     suppressWarnings(as.numeric(gsub(",", ".", gsub("\\s","", as.character(x)))))
   }
 
-  parse_one <- function(fp) {
-    if (!file.exists(fp)) return(NULL)
+parse_one <- function(fp) {
+  if (!file.exists(fp)) return(NULL)
 
-    df <- tryCatch(
-      read_excel(fp, col_names = TRUE, na = c("N.A","N/A")),
-      error = function(e) {
-        message("❌ XLSX read failed: ", conditionMessage(e))
-        return(NULL)
+  df <- tryCatch(
+    read_excel(fp, col_names = TRUE, na = c("N.A","N/A")),
+    error = function(e) {
+      message("❌ XLSX read failed: ", conditionMessage(e))
+      return(NULL)
+    }
+  )
+  if (is.null(df) || !nrow(df)) return(NULL)
+
+  names(df) <- make.names(names(df), unique = TRUE)
+
+  fname <- basename(fp)
+  low   <- tolower(fname)
+
+  ftype <- if (grepl("with.*tax", low)) "with_taxes"
+           else if (grepl("without.*tax", low)) "without_taxes"
+           else if (grepl("history", low)) "history"
+           else "unknown"
+
+  fb_date <- parse_date_token(fname)
+  dvec <- detect_date_col(df, fb_date)
+  if (all(is.na(dvec))) dvec <- rep(fb_date, nrow(df))
+
+  cidx <- detect_country_col(df)
+  country_vec <- if (!is.na(cidx)) as.character(df[[cidx]]) else rep(NA_character_, nrow(df))
+
+  value_cols <- names(df)[
+    vapply(df, function(x) {
+      if (is.numeric(x)) TRUE else {
+        y <- suppressWarnings(as.numeric(gsub(",", ".", gsub("\\s","", as.character(x)))))
+        any(!is.na(y))
       }
-    )
-    if (is.null(df) || !nrow(df)) return(NULL)
+    }, logical(1))
+  ]
 
-    names(df) <- make.names(names(df), unique = TRUE)
+  # 🔧 **FIXED drop list**
+  drop <- c(
+    "Prices.in.force.on", "Date", "Date.of.data", "Data", "Valid.on",
+    if (!is.na(cidx) && cidx > 0 && cidx <= ncol(df)) names(df)[cidx] else character(0)
+  )
 
-    fname <- basename(fp)
-    low   <- tolower(fname)
+  value_cols <- setdiff(value_cols, drop)
+  if (!length(value_cols)) return(NULL)
 
-    ftype <- if (grepl("with.*tax", low)) "with_taxes"
-             else if (grepl("without.*tax", low)) "without_taxes"
-             else if (grepl("history", low)) "history"
-             else "unknown"
+  for (v in value_cols) df[[v]] <- cast_numeric(df[[v]])
 
-    fb_date <- parse_date_token(fname)
-    dvec <- detect_date_col(df, fb_date)
-    if (all(is.na(dvec))) dvec <- rep(fb_date, nrow(df))
-
-    cidx <- detect_country_col(df)
-    country_vec <- if (!is.na(cidx)) as.character(df[[cidx]]) else rep(NA_character_, nrow(df))
-
-    value_cols <- names(df)[
-      vapply(df, function(x) {
-        if (is.numeric(x)) TRUE else {
-          y <- suppressWarnings(as.numeric(gsub(",", ".", gsub("\\s","", as.character(x)))))
-          any(!is.na(y))
-        }
-      }, logical(1))
-    ]
-
-    drop <- c("Prices.in.force.on","Date","Date.of.data","Data","Valid.on", names(df)[cidx])
-    value_cols <- setdiff(value_cols, drop)
-    if (!length(value_cols)) return(NULL)
-
-    for (v in value_cols) df[[v]] <- cast_numeric(df[[v]])
-
-    out <- vector("list", 4096L)
-    k <- 0L
-    for (i in seq_len(nrow(df))) {
-      for (v in value_cols) {
-        val <- df[[v]][i]
-        if (!is.na(val)) {
-          k <- k+1
-          if (k > length(out)) length(out) <- k+4096L
-          out[[k]] <- list(
-            date = as.Date(dvec[i]),
-            country = country_vec[i],
-            product = v,
-            value = val,
-            detected_type = ftype,
-            source_file = fname
-          )
-        }
+  out <- vector("list", 4096L)
+  k <- 0L
+  for (i in seq_len(nrow(df))) {
+    for (v in value_cols) {
+      val <- df[[v]][i]
+      if (!is.na(val)) {
+        k <- k + 1
+        if (k > length(out)) length(out) <- k + 4096L
+        out[[k]] <- list(
+          date = as.Date(dvec[i]),
+          country = country_vec[i],
+          product = v,
+          value = val,
+          detected_type = ftype,
+          source_file = fname
+        )
       }
     }
-    if (k == 0) return(NULL)
-    out <- out[seq_len(k)]
-    do.call(rbind.data.frame, out)
   }
+
+  if (k == 0) return(NULL)
+  out <- out[seq_len(k)]
+  df_long <- do.call(rbind.data.frame, out)
+  rownames(df_long) <- NULL
+  df_long
+}
 
   # ---- Parse all new files ----
 
