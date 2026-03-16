@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true   # Node 24 compatibility
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
     steps:
       - name: Checkout repo
@@ -35,7 +35,6 @@ jobs:
         shell: bash
         run: echo "RENV_PATHS_ROOT=${{ runner.temp }}/renv" >> $GITHUB_ENV
 
-      # 🔥 CRITICAL: prevent .Rprofile & .Renviron from loading
       - name: Install and activate renv (vanilla)
         shell: bash
         env:
@@ -70,13 +69,14 @@ jobs:
           R_ENVIRON_USER: ""
         run: Rscript --vanilla -e 'renv::restore()'
 
-      # --------------------------
-      # 🔥 YOUR DATA UPDATE LOGIC
-      # --------------------------
-      # Use the CORRECT script name in your repo:
-      #   script/update_wobs.R
-      # or script/update_db.R depending on your fork.
-      # --------------------------
+      # NEW STEP: Install missing scraper packages (xml2, rvest, stringr, dplyr)
+      - name: Install missing R packages for WOB scraper
+        shell: bash
+        env:
+          R_PROFILE_USER: ""
+          R_ENVIRON_USER: ""
+        run: |
+          Rscript --vanilla -e 'renv::activate(); pkgs <- c("xml2","rvest","stringr","dplyr"); missing <- setdiff(pkgs, rownames(installed.packages())); if (length(missing)) renv::install(missing)'
 
       - name: Update DB and logs (vanilla)
         shell: bash
