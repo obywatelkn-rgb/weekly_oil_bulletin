@@ -213,8 +213,10 @@ make_db <- function(path_dir_db, logs){
     # write header on first save
     write.table(db, path_db_csv, col.names = TRUE, row.names = FALSE, sep = ";")
   } else {
-    write.table(db, path_db_csv, col.names = FALSE, row.names = FALSE, sep = ";", append = TRUE)
+      # always write CSV with header if schema changed or initial was empty
+      write.table(db, path_db_csv, col.names = TRUE, row.names = FALSE, sep = ";")
   }
+
 
   if (!file.exists(path_db_bin)) {
     saveRDS(db, path_db_bin)
