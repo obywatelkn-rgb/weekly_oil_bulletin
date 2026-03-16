@@ -3,11 +3,14 @@
 # Weekly Oil Bulletin Auto-Update Workflow
 # Aligned with EU Thursday release schedule
 
+
 on:
+  workflow_dispatch:
   push:
     paths: ["**"]
   schedule:
-    - cron: "30 7 * * 4"   # Thursday 08:30 CET
+    - cron: "30 7 * * 4"
+
 
 name: UpdateDB
 
