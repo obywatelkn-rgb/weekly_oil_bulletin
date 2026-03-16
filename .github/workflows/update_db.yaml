@@ -4,25 +4,25 @@
 # Aligned with EU Thursday release schedule
 
 
+name: UpdateDB
+
 on:
   workflow_dispatch:
   push:
     paths: ["**"]
   schedule:
-    - cron: "30 7 * * 4"
-
-
-name: UpdateDB
+    - cron: "30 7 * * 4"   # Thu 08:30 CET (07:30 UTC)
 
 jobs:
   update:
     runs-on: ubuntu-latest
     env:
       GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
@@ -36,22 +36,29 @@ jobs:
         with:
           use-public-rspm: true
 
+      # Keep renv cache in temp (does not depend on project profiles)
       - name: Set RENV_PATHS_ROOT
         shell: bash
         run: echo "RENV_PATHS_ROOT=${{ runner.temp }}/renv" >> $GITHUB_ENV
 
-      - name: Install and activate renv
+      - name: Install and activate renv (vanilla)
+        shell: bash
+        env:
+          R_PROFILE_USER: ""
+          R_ENVIRON_USER: ""
         run: |
-          install.packages("renv")
-          renv::activate()
-        shell: Rscript {0}
+          Rscript --vanilla -e 'install.packages("renv", repos="https://cloud.r-project.org")'
+          Rscript --vanilla -e 'renv::activate()'
 
-      - name: Get R and OS version
+      - name: Get R and OS version (vanilla)
         id: get-version
+        shell: bash
+        env:
+          R_PROFILE_USER: ""
+          R_ENVIRON_USER: ""
         run: |
-          cat("os-version=", sessionInfo()$running, "\n", file = Sys.getenv("GITHUB_OUTPUT"), sep = "", append = TRUE)
-          cat("r-version=", R.Version()$version.string, "\n", file = Sys.getenv("GITHUB_OUTPUT"), sep = "", append = TRUE)
-        shell: Rscript {0}
+          Rscript --vanilla -e 'cat("os-version=", sessionInfo()$running, "\n", file = Sys.getenv("GITHUB_OUTPUT"), sep = "", append = TRUE)'
+          Rscript --vanilla -e 'cat("r-version=", R.Version()$version.string, "\n", file = Sys.getenv("GITHUB_OUTPUT"), sep = "", append = TRUE)'
 
       - name: Restore Renv package cache
         uses: actions/cache@v3
@@ -61,31 +68,67 @@ jobs:
           restore-keys: |
             ${{ steps.get-version.outputs.os-version }}-${{ steps.get-version.outputs.r-version }}-
 
-      - name: renv restore
-        run: renv::restore()
-        shell: Rscript {0}
-
-      - name: Update DB and logs
+      - name: renv restore (vanilla)
+        shell: bash
+        env:
+          R_PROFILE_USER: ""
+          R_ENVIRON_USER: ""
         run: |
-          source("script/update_db.R")
-        shell: Rscript {0}
+          Rscript --vanilla -e 'renv::restore()'
 
-      # Optional if these scripts exist
-      - name: Update fig
+      # Optional diagnostics to confirm folders and session
+      - name: Diagnostics (vanilla)
+        shell: bash
+        env:
+          R_PROFILE_USER: ""
+          R_ENVIRON_USER: ""
         run: |
-          source("script/update_fig.R")
-        shell: Rscript {0}
+          Rscript --vanilla -e 'sessionInfo()'
+          Rscript --vanilla -e 'cat("\nHas renv.lock? ", file.exists("renv.lock"), "\n"); if (dir.exists("script")) print(list.files("script", recursive=TRUE))'
 
-      - name: Update Readme
+      # === Your data update ===
+      - name: Update DB and logs (verbose, vanilla)
+        shell: bash
+        env:
+          R_PROFILE_USER: ""
+          R_ENVIRON_USER: ""
         run: |
-          source("script/update_readme.R")
-        shell: Rscript {0}
+          Rscript --vanilla -e 'options(warn=1); tryCatch({ source("script/update_db.R", echo=TRUE, max.deparse.length=Inf) }, error=function(e){ message("---- ERROR in update_db.R ----"); message(conditionMessage(e)); traceback(3); quit(status=1) })'
+
+      # Keep these only if the files exist in your repo
+      - name: Update fig (vanilla)
+        if: always()
+        shell: bash
+        env:
+          R_PROFILE_USER: ""
+          R_ENVIRON_USER: ""
+        run: |
+          if [ -f "script/update_fig.R" ]; then
+            Rscript --vanilla -e 'source("script/update_fig.R")'
+          else
+            echo "script/update_fig.R not found, skipping"
+          fi
+
+      - name: Update Readme (vanilla)
+        if: always()
+        shell: bash
+        env:
+          R_PROFILE_USER: ""
+          R_ENVIRON_USER: ""
+        run: |
+          if [ -f "script/update_readme.R" ]; then
+            Rscript --vanilla -e 'source("script/update_readme.R")'
+          else
+            echo "script/update_readme.R not found, skipping"
+          fi
 
       - name: Commit and push changes
+        shell: bash
         run: |
           git config --local user.name "$GITHUB_ACTOR"
           git config --local user.email "$GITHUB_ACTOR@users.noreply.github.com"
           git pull --ff-only
-          git add data/meta* data/db* doc/* README.md fig/*
+          git add data/meta* data/db* doc/* README.md fig/* || true
           git commit -m "Update WOB" || echo "No changes to commit"
           git push origin
+``
