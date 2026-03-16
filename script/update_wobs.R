@@ -1,39 +1,39 @@
-## process WOBs
+## process WOBs (modern EC-compatible version, 2026+)
 
 source("./R/downloads.R")
 
-path_log <- "./doc/log/log.csv"
-url_wob_list <- "https://energy.ec.europa.eu/document/download/6f019759-598e-4926-85da-8871758b0e98_en?filename=List-of-WOB.pdf"
+path_log    <- "./doc/log/log.csv"
 path_dir_db <- "./data/db/"
 
-# current wob list -------------------------------------------------------
+message("------------------------------------------------------------")
+message("Fetching Weekly Oil Bulletin XLSX links from the EC website")
+message("------------------------------------------------------------")
 
+# 1) Scrape XLSX links directly from official EC page
+#    https://energy.ec.europa.eu/data-and-analysis/weekly-oil-bulletin_en  [1](https://energy.ec.europa.eu/index_en)
+wobs <- get_wob_xlsx_links()
 
-res <- get_wob_list(
-  url = url_wob_list,
-  path_download = 'data/meta/'
-)
+# keep only valid URLs
+wobs <- wobs[!is.na(wobs$url), , drop = FALSE]
 
-wobs <- read_wob_list(res$path_file)
-wobs <- wobs[!is.na(wobs$url), ]
+message(sprintf("Found %d XLSX bulletin files.", nrow(wobs)))
 
-
+# 2) Initialize or load existing logs
 logs <- init_logs(path_log)
 
-# download wobs -------------------------------------------------------------
+# 3) Download all missing XLSX files
+logs <- download_wobs(
+  wobs      = wobs,
+  logs      = logs,
+  path_data = "./data/raw"
+)
 
-
-
-logs <- download_wobs(wobs = wobs, logs = logs,   path_data = "./data/raw")
-
-
-# write db  -------------------------------------------------------------
+# 4) Build/update the database
 logs <- make_db(path_dir_db, logs)
 
-
-# db checks!
-# update logs -------------------------------------------------------------
+# 5) Save updated logs
 update_logs(logs = logs, path_log = path_log)
 
-
-
+message("------------------------------------------------------------")
+message("Weekly Oil Bulletin update complete.")
+message("------------------------------------------------------------")
