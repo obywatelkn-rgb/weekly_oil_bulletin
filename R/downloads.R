@@ -209,15 +209,7 @@ make_db <- function(path_dir_db, logs){
   db <- do.call(rbind, db)
   message(sprintf('Appending %.0f rows to DB', nrow(db)))
 
-  if (!file.exists(path_db_csv)) {
-    # write header on first save
-    write.table(db, path_db_csv, col.names = TRUE, row.names = FALSE, sep = ";")
-  } else {
-      # always write CSV with header if schema changed or initial was empty
-      write.table(db, path_db_csv, col.names = TRUE, row.names = FALSE, sep = ";")
-  }
-
-
+  # --- save RDS cumulatively ---
   if (!file.exists(path_db_bin)) {
     saveRDS(db, path_db_bin)
   } else {
@@ -225,6 +217,16 @@ make_db <- function(path_dir_db, logs){
     db_all  <- rbind(db_prev, db)
     saveRDS(db_all, path_db_bin)
   }
+  
+  # --- always rewrite CSV from the full cumulative RDS ---
+  db_full <- readRDS(path_db_bin)   # full, cumulative DB
+  write.table(
+    db_full,
+    path_db_csv,
+    col.names = TRUE,
+    row.names = FALSE,
+    sep = ";"
+  )
 
   logs[db_mask, ] <- wobs_to_db
   logs
