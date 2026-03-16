@@ -5,7 +5,7 @@ on:
   push:
     paths: ["**"]
   schedule:
-    - cron: "30 7 * * 4"   # Thursday 07:30 UTC (08:30 CET)
+    - cron: "30 7 * * 4"
 
 jobs:
   update:
@@ -67,20 +67,25 @@ jobs:
         env:
           R_PROFILE_USER: ""
           R_ENVIRON_USER: ""
-        run: |
-          Rscript --vanilla -e 'renv::restore()'
+        run: Rscript --vanilla -e 'renv::restore()'
 
       ####################################################################
-      # 🔥 FIX FOR MISSING PACKAGES + BROKEN dplyr → FORCE INSTALL rlang
+      # FIX: Install missing dependencies in SAFE ORDER:
+      #      1) vctrs
+      #      2) rlang
+      #      3) dplyr
+      #      4) xml2, rvest, stringr
       ####################################################################
-      - name: Install required scraper packages (rlang first!)
+      - name: Install required R packages (vctrs → rlang → dplyr → xml2/rvest/stringr)
         shell: bash
         env:
           R_PROFILE_USER: ""
           R_ENVIRON_USER: ""
         run: |
+          Rscript --vanilla -e 'renv::activate(); renv::install("vctrs")'
           Rscript --vanilla -e 'renv::activate(); renv::install("rlang")'
-          Rscript --vanilla -e 'renv::install(c("xml2","rvest","stringr","dplyr"))'
+          Rscript --vanilla -e 'renv::activate(); renv::install("dplyr")'
+          Rscript --vanilla -e 'renv::activate(); renv::install(c("xml2","rvest","stringr"))'
 
       ####################################################################
 
@@ -108,9 +113,7 @@ jobs:
         run: |
           if [ -f "script/update_fig.R" ]; then
             Rscript --vanilla -e 'source("script/update_fig.R")'
-          else
-            echo "No update_fig.R found — skipping."
-          fi
+          else echo "No update_fig.R found — skipping."; fi
 
       - name: Update Readme if script exists
         if: always()
@@ -121,9 +124,7 @@ jobs:
         run: |
           if [ -f "script/update_readme.R" ]; then
             Rscript --vanilla -e 'source("script/update_readme.R")'
-          else
-            echo "No update_readme.R found — skipping."
-          fi
+          else echo "No update_readme.R found — skipping."; fi
 
       - name: Commit and push changes
         shell: bash
