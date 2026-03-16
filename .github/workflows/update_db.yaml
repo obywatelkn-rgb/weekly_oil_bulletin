@@ -67,16 +67,22 @@ jobs:
         env:
           R_PROFILE_USER: ""
           R_ENVIRON_USER: ""
-        run: Rscript --vanilla -e 'renv::restore()'
+        run: |
+          Rscript --vanilla -e 'renv::restore()'
 
-      # NEW STEP: Install missing scraper packages (xml2, rvest, stringr, dplyr)
-      - name: Install missing R packages for WOB scraper
+      ####################################################################
+      # 🔥 FIX FOR MISSING PACKAGES + BROKEN dplyr → FORCE INSTALL rlang
+      ####################################################################
+      - name: Install required scraper packages (rlang first!)
         shell: bash
         env:
           R_PROFILE_USER: ""
           R_ENVIRON_USER: ""
         run: |
-          Rscript --vanilla -e 'renv::activate(); pkgs <- c("xml2","rvest","stringr","dplyr"); missing <- setdiff(pkgs, rownames(installed.packages())); if (length(missing)) renv::install(missing)'
+          Rscript --vanilla -e 'renv::activate(); renv::install("rlang")'
+          Rscript --vanilla -e 'renv::install(c("xml2","rvest","stringr","dplyr"))'
+
+      ####################################################################
 
       - name: Update DB and logs (vanilla)
         shell: bash
