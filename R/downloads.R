@@ -237,44 +237,60 @@ make_db <- function(path_dir_db, logs){
 # ------------------------------------------------------------
 init_logs <- function(path_log){
 
-  if(!file.exists(path_log)){
-    log <- structure(list(bulletin = character(0), ind = character(0), values = character(0),
-                          url = character(0), download_date = character(0), path_file = character(0),
-                          in_db = logical(0)), row.names = integer(0), class = "data.frame")
-    write.table(
-      log,
-      path_log,
-      row.names = FALSE,
-      col.names = TRUE,
-      sep = ",")
+  make_empty_log <- function() {
+    structure(
+      list(
+        bulletin      = character(0),
+        ind           = character(0),
+        values        = character(0),
+        url           = character(0),
+        download_date = character(0),
+        path_file     = character(0),
+        in_db         = logical(0)
+      ),
+      row.names = integer(0),
+      class = "data.frame"
+    )
+  }
+
+  if (!file.exists(path_log)) {
+    # Create a brand-new empty log with header
+    log <- make_empty_log()
+    write.table(log, path_log, row.names = FALSE, col.names = TRUE, sep = ",")
     message(sprintf("Initiated empty log in %s\n", path_log))
-
-  } else {
-    message(sprintf("Log already exists in %s. Loading\n", path_log))
-    log <- read.csv(path_log)
+    return(log)
   }
+
+  # File exists — handle 0-byte or malformed files safely
+  if (file.info(path_log)$size == 0) {
+    message(sprintf("Existing log at %s is empty; reinitializing.\n", path_log))
+    log <- make_empty_log()
+    write.table(log, path_log, row.names = FALSE, col.names = TRUE, sep = ",")
+    return(log)
+  }
+
+  # Try to read; if malformed, recreate empty
+  log <- tryCatch(
+    read.csv(path_log, stringsAsFactors = FALSE),
+    error = function(e) {
+      message(sprintf("Log at %s could not be parsed; reinitializing. (%s)\n", path_log, conditionMessage(e)))
+      lg <- make_empty_log()
+      write.table(lg, path_log, row.names = FALSE, col.names = TRUE, sep = ",")
+      lg
+    }
+  )
+
+  # Ensure required columns exist (schema check)
+  req_cols <- c("bulletin","ind","values","url","download_date","path_file","in_db")
+  missing <- setdiff(req_cols, names(log))
+  if (length(missing)) {
+    message(sprintf("Log missing columns %s; reinitializing.\n", paste(missing, collapse=", ")))
+    log <- make_empty_log()
+    write.table(log, path_log, row.names = FALSE, col.names = TRUE, sep = ",")
+  }
+
+  message(sprintf("Log already exists in %s. Loading\n", path_log))
   return(log)
-}
-
-update_logs <- function(logs, path_log){
-
-  if(!file.exists(path_log)){
-    write.table(
-      logs,
-      path_log,
-      col.names = TRUE,
-      row.names = FALSE,
-      sep = ",")
-  } else {
-    message("Overwriting existing log.")
-    write.table(
-      logs,
-      path_log,
-      col.names = TRUE,
-      row.names = FALSE,
-      sep = ",",
-      append = FALSE)
-  }
 }
 
 # ------------------------------------------------------------
