@@ -131,4 +131,3 @@ jobs:
           git add data/meta* data/db* doc/* README.md fig/* || true
           git commit -m "Update WOB" || echo "No changes to commit"
           git push origin
-``
