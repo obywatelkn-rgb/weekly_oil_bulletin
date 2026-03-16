@@ -1,179 +1,154 @@
-get_wob_list <- function(url, path_download = tempdir()){
+# Modern Weekly Oil Bulletin downloader (2026+)
+# ------------------------------------------------------------
+# This file supersedes the legacy PDF-based logic and
+# the former ec.europa.eu/energy/observatory URLs.
+# It scrapes the official EC "Weekly Oil Bulletin" page and
+# downloads the weekly XLSX files directly.
+#
+# Source of truth (current EC site):
+# https://energy.ec.europa.eu/data-and-analysis/weekly-oil-bulletin_en
+# ------------------------------------------------------------
 
-  path_file <- normalizePath(
-    file.path(
-      path_download,
-      "wob_list.pdf")
+# Dependencies used here:
+# - rvest, xml2  : HTML parsing
+# - readxl       : reading XLSX (used in make_db)
+# - base R       : regex, download.file, data.frame ops
+
+# ---------------------------------------------------------------------
+# NEW (2026+): Scrape XLSX links from the EC Weekly Oil Bulletin page
+# ---------------------------------------------------------------------
+get_wob_xlsx_links <- function() {
+  # Official page (continually updated; weekly cadence)
+  url_page <- "https://energy.ec.europa.eu/data-and-analysis/weekly-oil-bulletin_en"
+
+  # Read HTML
+  html <- xml2::read_html(url_page)
+
+  # Grab all anchor hrefs
+  links <- rvest::html_nodes(html, "a")
+  hrefs <- rvest::html_attr(links, "href")
+  hrefs <- hrefs[!is.na(hrefs)]
+
+  # Keep only .xlsx files
+  xlsx_links <- hrefs[grepl("\\.xlsx$", hrefs, ignore.case = TRUE)]
+
+  # Normalize to absolute URLs
+  xlsx_links <- ifelse(
+    grepl("^https?://", xlsx_links, ignore.case = TRUE),
+    xlsx_links,
+    paste0("https://energy.ec.europa.eu", xlsx_links)
   )
 
-  dl_status <- download.file(
-    url,
-    destfile = path_file,
-    mode = 'wb'
+  # Build simple data.frame
+  df <- data.frame(
+    url  = xlsx_links,
+    file = basename(xlsx_links),
+    stringsAsFactors = FALSE
   )
 
-  return(
-    list(
-      path_file = path_file,
-      dl_status = dl_status))
+  # Filter to weekly "prices" files only:
+  #  - include 'price' in filename
+  #  - exclude 'developments' and 'duties' overview files
+  keep <- grepl("price", df$file, ignore.case = TRUE) &
+          !grepl("developments|dutie", df$file, ignore.case = TRUE)
+  df <- df[keep, , drop = FALSE]
 
+  # Try to extract a YYYYMMDD (or YYYY_MM_DD / YYYY-MM-DD) from filename
+  pattern <- "(\\d{4}[ _-]?\\d{2}[ _-]?\\d{2})"
+  m <- regexpr(pattern, df$file, perl = TRUE)
+  dates_raw <- ifelse(m > 0, regmatches(df$file, m), NA_character_)
+  # Normalize date token to YYYY_MM_DD if present
+  dates_norm <- ifelse(
+    is.na(dates_raw), NA_character_,
+    gsub("[_ -]", "_", dates_raw, perl = TRUE)
+  )
+
+  # Attach derived date (may be NA if filename has no date token)
+  df$date <- dates_norm
+
+  return(df)
 }
 
-download_wobs <- function(wobs, logs,   path_data = "./data/raw"){
+# ------------------------------------------------------------
+# Download newly found WOB XLSX files and update logs
+# ------------------------------------------------------------
+download_wobs <- function(wobs, logs, path_data = "./data/raw") {
 
-  if(!file.exists(path_data)){
+  if (!file.exists(path_data)) {
     dir.create(path_data, recursive = TRUE)
   }
 
+  # Only download URLs not present in log
+  dl_mask <- wobs$url %nin% logs$url
+  wobs_to_dl <- wobs[dl_mask, , drop = FALSE]
 
+  message(sprintf("Found %d XLSX file(s) for download", nrow(wobs_to_dl)))
 
-  # non-downloaded data from logs
-  dl_mask <- make_log_mask(wobs, logs, verbose = TRUE)
+  if (nrow(wobs_to_dl) == 0) {
+    return(logs)
+  }
 
-  # focus on raw data
-  wobs <- subset(wobs[dl_mask, ], ind %in% c("Data (XLS)"))
-  # sort by date
-  wobs <- wobs[order(make_date(wobs$values)), ]
+  for (i in seq_len(nrow(wobs_to_dl))) {
 
-  fails <- list()
+    url <- wobs_to_dl$url[i]
+    file_name <- basename(url)
+    path_file <- file.path(path_data, file_name)
 
-  for(idx in seq_len(nrow(wobs))){
+    message(sprintf("Downloading %s ...", file_name))
 
+    # Best-effort download; if it fails, skip and continue
+    dl_ok <- TRUE
+    tryCatch({
+      utils::download.file(url, destfile = path_file, mode = "wb", quiet = TRUE)
+    }, error = function(e) {
+      message(sprintf("❌ Failed to download %s (%s)", url, conditionMessage(e)))
+      dl_ok <- FALSE
+    })
 
-    file_name <- basename(wobs[['url']][idx])
+    if (!dl_ok) next
 
-    path_file <- file.path(
-      path_data,
-      file_name
+    # Append a log row
+    log_row <- data.frame(
+      bulletin      = if (!is.null(wobs_to_dl$date[i]) && !is.na(wobs_to_dl$date[i])) wobs_to_dl$date[i] else "",
+      ind           = "xlsx",
+      values        = if (!is.null(wobs_to_dl$date[i]) && !is.na(wobs_to_dl$date[i])) wobs_to_dl$date[i] else "",
+      url           = url,
+      download_date = as.character(Sys.Date()),
+      path_file     = path_file,
+      in_db         = FALSE,
+      stringsAsFactors = FALSE
     )
 
-    if(!file.exists(path_file)){
-      dl_status <- download.file(
-        url = wobs[['url']][idx],
-        destfile = path_file,
-        mode = 'wb'
-      )
-
-      if(dl_status > 0){
-        fails <- append(fails, list(url = wobs[['url']][idx], status = dl_status))
-        message(sprintf("Download for File %s failed, going to next entry\n", file_name))
-        next
-
-      }
-
-    } else if(file.exists(path_file) & wobs[['url']][idx] %in% logs[['url']]){
-      message(sprintf("File %s already exists and is listed in log\n", file_name))
-      next
-
-    }
-
-
-    if(file.exists(path_file) & wobs[['url']][idx] %nin% logs[['url']]){
-
-
-      log_row <- logs[0, ]
-      log_row[1 ,c("bulletin", "ind", "values","url")] <-
-        wobs[idx, c("bulletin", "ind", "values","url")]
-
-      log_row[1, c("download_date")] <-
-        as.character(Sys.Date())
-      log_row[1, c("in_db")] <-
-        c(FALSE)
-      log_row[1, c("path_file")] <- path_file
-
-      logs <- rbind(logs, log_row)
-
-      message(
-        sprintf(
-          "Added downloaded WOB #%s from %s to download log\n --- \n",
-          wobs[['bulletin']][idx],
-          file_name))
-
-    }
-
+    logs <- rbind(logs, log_row)
   }
 
   return(logs)
-
 }
 
-
-# get WOB meta and links
-read_wob_list <- function(path_file){
-
-  wob_list <- pdftools::pdf_text(path_file)
-
-  rows<-scan(
-    textConnection(wob_list),
-    what="character",
-    sep = "\n")
-
-  category <- gsub("^\\s+", "", strsplit(rows[2], "   ")[[1]], perl = TRUE)
-  category <- category[nchar(category)>0]
-
-  type <- strsplit(rows[3], "[ ]+", perl = TRUE)[[1]]
-  wob_colnames <- paste(category, type)
-
-  data_meta <- strsplit(rows[4:length(rows)], "\\s+")
-  n_columns <- length(data_meta[[1]])
-  column_list <- vector('list', n_columns)
-
-  for(j in seq_along(column_list)){
-    for(i in seq_along(data_meta)){
-
-      column_list[[j]][i] <- data_meta[[i]][j]
-    }
-  }
-
-  wob_list <- as.data.frame(do.call(cbind, column_list))
-  colnames(wob_list) <- wob_colnames
-
-
-  wob_list <- cbind(bulletin = wob_list[,1], (stack(wob_list[, -1])[c(2,1)]))
-  wob_list$ind <- as.character(wob_list$ind)
-
-  wob_list$url <- make_wob_url(
-    bulletin = wob_list$bulletin,
-    type = wob_list$ind,
-    date = wob_list$values)
-
-
-  return(wob_list)
-
-
-}
-
-
-
+# ------------------------------------------------------------
+# Database builder: keep your existing logic
+# ------------------------------------------------------------
 make_db <- function(path_dir_db, logs){
 
   path_db_bin <- file.path(path_dir_db, "wob_full.rds")
   path_db_csv <- file.path(path_dir_db, "wob_full.csv")
 
-
   stopifnot('No entries in logs yet.' = nrow(logs) > 0)
 
   # grab path file and in db NA/FALSE
-
   db_mask <- (is.na(logs[['in_db']]) | !logs[['in_db']]) &
-    (!is.na(logs[['path_file']]) | nchar(logs[['path_file']]) > 0)
-
-
+             (!is.na(logs[['path_file']]) | nchar(logs[['path_file']]) > 0)
 
   wobs_to_db <- logs[db_mask, ]
 
-
-
-  if(nrow(wobs_to_db) < 1) {
-
+  if (nrow(wobs_to_db) < 1) {
     message("No new data to append.")
-
     return(logs)
-
   }
 
   db <- vector('list', nrow(wobs_to_db))
 
+  # Read with types compatible with weekly prices files
   coltypes <- c(
     "date",
     "text",
@@ -186,93 +161,76 @@ make_db <- function(path_dir_db, logs){
     "text"
   )
 
-  for(idx in seq_len(nrow(wobs_to_db))){
+  for (idx in seq_len(nrow(wobs_to_db))){
 
     # check if file exists, if not, clear log position
-    if(!file.exists(wobs_to_db[idx, 'path_file'])){
-
+    if (!file.exists(wobs_to_db[idx, 'path_file'])) {
       wobs_to_db[idx, 'path_file'] <- NA
-
     } else {
+      dbfill <- tryCatch({
+        readxl::read_excel(
+          path      = wobs_to_db[idx, 'path_file'],
+          col_types = coltypes,
+          col_names = TRUE,
+          na        = c("N.A", "N/A")
+        )
+      }, error = function(e) {
+        message(sprintf("❌ Failed to read %s : %s",
+                        wobs_to_db[idx, 'path_file'], conditionMessage(e)))
+        NULL
+      })
 
-      dbfill <- readxl::read_excel(
-        path = wobs_to_db[idx, 'path_file'],
-        col_types = coltypes,
-        col_names = TRUE,
-        na = c("N.A", "N/A"))
+      if (is.null(dbfill)) next
 
-      db[[idx]] <- dbfill[!is.na(dbfill[["Prices in force on"]]), ]
+      # keep rows with a valid date marker column if present
+      if ("Prices in force on" %in% names(dbfill)) {
+        db[[idx]] <- dbfill[!is.na(dbfill[["Prices in force on"]]), ]
+      } else {
+        # fallback: keep all rows (schema may vary slightly)
+        db[[idx]] <- dbfill
+      }
 
-      #
-      # db[[idx]] <- readxl::read_excel(
-      #   path = wobs_to_db[idx, 'path_file'],
-      #   col_types = coltypes,
-      #   col_names = TRUE,
-      #   na = c("N.A", "N/A"))[-c(122,123), ]
-
-      # remove , and force numeric for the last three columns
-      db[[idx]][,7:9] <- apply(
-        db[[idx]][,7:9],
-        MARGIN = 2,
-        FUN = function(x) as.numeric(gsub("[,]", "", x))
-      )
-
-
+      # remove commas and coerce numeric in last three cols if present
+      if (ncol(db[[idx]]) >= 9) {
+        suppressWarnings({
+          db[[idx]][, 7:9] <- apply(
+            db[[idx]][, 7:9, drop = FALSE],
+            MARGIN = 2,
+            FUN = function(x) as.numeric(gsub(",", "", x))
+          )
+        })
+      }
 
       wobs_to_db[idx, 'in_db'] <- TRUE
-
     }
-
-
   }
 
+  # combine and persist
   db <- do.call(rbind, db)
-
   message(sprintf('Appending %.0f rows to DB', nrow(db)))
 
-  if(!file.exists(path_db_csv)){
-
-    # delim
-    write.table(
-      db,
-      path_db_csv,
-      col.names = TRUE,
-      row.names = FALSE,
-      sep = ";")
-
-
-
-  } else if(file.exists(path_db_csv)){
-    write.table(
-      db,
-      path_db_csv,
-      col.names = FALSE
-      ,
-      row.names = FALSE,
-      sep = ";",
-      append = TRUE)
-
+  if (!file.exists(path_db_csv)) {
+    # write header on first save
+    write.table(db, path_db_csv, col.names = TRUE, row.names = FALSE, sep = ";")
+  } else {
+    write.table(db, path_db_csv, col.names = FALSE, row.names = FALSE, sep = ";", append = TRUE)
   }
 
-  if(!file.exists(path_db_bin)){
-
-    # binary
+  if (!file.exists(path_db_bin)) {
     saveRDS(db, path_db_bin)
-  } else if(file.exists(path_db_bin)){
-
-    db <- rbind(readRDS(path_db_bin), db)
-    saveRDS(db, path_db_bin)
-
+  } else {
+    db_prev <- readRDS(path_db_bin)
+    db_all  <- rbind(db_prev, db)
+    saveRDS(db_all, path_db_bin)
   }
 
   logs[db_mask, ] <- wobs_to_db
-
-
   logs
-
 }
 
-
+# ------------------------------------------------------------
+# Log helpers (unchanged)
+# ------------------------------------------------------------
 init_logs <- function(path_log){
 
   if(!file.exists(path_log)){
@@ -290,12 +248,9 @@ init_logs <- function(path_log){
   } else {
     message(sprintf("Log already exists in %s. Loading\n", path_log))
     log <- read.csv(path_log)
-    # log[['download_date']] <- as.Date(log[['download_date']])
-
   }
   return(log)
 }
-
 
 update_logs <- function(logs, path_log){
 
@@ -316,138 +271,27 @@ update_logs <- function(logs, path_log){
       sep = ",",
       append = FALSE)
   }
-
 }
 
-
-# helpers -----------------------------------------------------------------
-
-
-
-make_wob_url <- function(bulletin, type, date){
-
-  missing_mask <- is.na(date)
-
-  n_identical_obs <- length(unique(lengths(list(bulletin, type, date))))
-
-  if(n_identical_obs > 1){
-    stop("All arguments must have the same lengths")
-  }
-
-  base_url <- "http://ec.europa.eu/energy/observatory/reports/"
-
-
-
-
-
-  data_format <- pdf_or_xlsx(type)
-  type <- tolower(gsub("[ ]+[(].*$", "", type))
-  type <- gsub("\\s", "_", type)
-
-  type <- ifelse(type == 'data', 'raw_data', type)
-
-  date <- as.Date(strptime(date, format = '%d/%m/%Y'))
-  date_switch_to_xlsx <- date>=as.Date("2018-09-10")
-
-  date <- format(date, '%Y_%m_%d')
-
-  # system switches to xlsx
-  data_format[date_switch_to_xlsx & data_format=='xls'] <- 'xlsx'
-
-
-
-  urls <- paste0(
-    base_url,
-    date,
-    "_",
-    type,
-    "_",
-    bulletin,
-    ".",
-    data_format)
-
-
-  urls[missing_mask] <- NA
-
-  return(urls)
-
-}
-
-
-pdf_or_xlsx <- function(str){
-
-  sapply(
-    str,
-    function(x){
-
-      if(grepl("xlsx?", x, ignore.case = TRUE, perl = TRUE)){
-        ftype <- "xls"
-      } else {
-        ftype <- "pdf"
-      }
-      return(ftype)
-    },
-    USE.NAMES = FALSE
-  )
-
-}
-
+# ------------------------------------------------------------
+# Misc helpers (some kept for compatibility)
+# ------------------------------------------------------------
 `%nin%` <- Negate(`%in%`)
+
 make_log_mask <- function(wobs, logs, verbose = FALSE){
-
-
-
-
   if(nrow(logs) == 0){
-
     mask <- !logical(nrow(wobs))
-
   } else {
-
     mask <- wobs[['url']] %nin% logs[['url']]
-
   }
-
   if(verbose){
     message(sprintf("Found %d wob's for download\n", length(mask)))
   }
-
   return(mask)
-
 }
-
 
 make_date <- function(x){
   return(strptime(x, "%d/%m/%Y"))
 }
 
-# check_db <- function(path_db)
-
-
-# test --------------------------------------------------------------------
-#
-# res <- get_wob_list(
-#   url = "https://ec.europa.eu/energy/observatory/reports/List-of-WOB.pdf",
-#   path_download = 'data/meta/'
-# )
-#
-# wobs <- read_wob_list(res$path_file)
-# log <- wobs[0, ]
-# log$download_date <- character(0)
-# log$path_file <- character(0)
-# log$in_db <- logical(0)
-# write.table(log, "./doc/log/log.csv", row.names = FALSE, col.names = TRUE, sep = ",")
-#
-# make_log_mask(wobs, "./doc/log/log.csv", verbose = TRUE)
-#
-#
-#
-# update_log <- function(path_dir_data, path_file_db, path_log){
-#
-#
-#
-#
-#
-# }
-#
-#
+# (end of file)
