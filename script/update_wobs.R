@@ -3,7 +3,7 @@
 source("./R/downloads.R")
 
 path_log <- "./doc/log/log.csv"
-url_wob_list <- "https://ec.europa.eu/energy/observatory/reports/List-of-WOB.pdf"
+url_wob_list <- "https://energy.ec.europa.eu/document/download/6f019759-598e-4926-85da-8871758b0e98_en?filename=List-of-WOB.pdf"
 path_dir_db <- "./data/db/"
 
 # current wob list -------------------------------------------------------
